@@ -1,1 +1,373 @@
 
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+<style>
+* { box-sizing: border-box; }
+
+body {
+  font-family: 'Inter', sans-serif;
+  padding: 10px;
+  margin: 0;
+}
+
+label, input, button {
+  font-size: 14px;
+  font-family: 'Inter', sans-serif;
+}
+
+input  { padding: 5px; }
+button { padding: 5px 10px; margin-left: 5px; }
+
+#loading {
+  display: inline-block;
+  margin-left: 10px;
+  font-size: 14px;
+  color: #666;
+  font-family: 'Inter', sans-serif;
+}
+
+.search-bar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  width: 100%;
+}
+
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.table-container {
+  overflow: auto;
+  max-height: 80vh;
+  margin-top: 15px;
+  position: relative;
+}
+
+table {
+  border-collapse: separate;
+  border-spacing: 0;
+  width: 100%;
+  min-width: 800px;
+}
+
+td {
+  border-top:    1px solid #ccc;
+  border-left:   1px solid #ccc;
+  border-bottom: none;
+  border-right:  none;
+  padding: 4px;
+  text-align: center;
+  vertical-align: middle;
+  font-family: 'Inter', sans-serif;
+  font-size: 14px;
+  white-space: nowrap;
+}
+
+td.sticky-row-col { position: sticky; z-index: 30; }
+td.sticky-row     { position: sticky; z-index: 20; }
+td.sticky-col     { position: sticky; z-index: 10; }
+
+.highlight-blue {
+  background: blue !important;
+  color: white !important;
+  font-weight: bold !important;
+  font-style: italic !important;
+}
+
+.highlight-red {
+  background: red !important;
+  color: white !important;
+  font-weight: bold !important;
+  font-style: italic !important;
+}
+
+@media screen and (max-width: 600px) {
+  td { padding: 2px; font-size: 12px; }
+  table { min-width: 600px; }
+  .search-bar { flex-direction: column; align-items: flex-start; gap: 6px; }
+}
+</style>
+</head>
+<body>
+
+<div class="search-bar">
+  <div class="search-row">
+    <label>ค้นหา 1 (🔵): </label>
+    <input id="nameInput1" onkeydown="if(event.key==='Enter') searchName(1)"/>
+    <button onclick="searchName(1)">ค้นหา</button>
+  </div>
+  <div class="search-row">
+    <label>ค้นหา 2 (🔴): </label>
+    <input id="nameInput2" onkeydown="if(event.key==='Enter') searchName(2)"/>
+    <button onclick="searchName(2)">ค้นหา</button>
+  </div>
+</div>
+<span id="loading">⏳ กำลังโหลด...</span>
+
+<div class="table-container">
+  <table id="crtTable"></table>
+</div>
+
+<script>
+var SHEET_ID   = '19jyKjeTzRHKyB5hK2tk4DO3cXjT9Nw5yFJtub1SDakU';
+var SHEET_NAME = 'CRT Official';
+var API_KEY    = 'AIzaSyAvkv4ZYfja6JSPZtK-d9DSjOjvrz0hUaI'; // ← ใส่ key จริงตรงนี้
+
+var frozenRows = 6;
+var frozenCols = 1;
+
+var borderGroups = [
+  [0,5],   [7,7],   [8,11],  [12,15], [16,20],
+  [22,22], [23,24], [25,26], [27,28], [30,30],
+  [31,32], [33,34], [36,36], [37,38], [39,40],
+  [42,42], [43,44], [45,46],
+];
+
+var thickRows = [0, 1, 2, 5];
+
+var thickColRanges = [
+  [0,5], [7,20], [22,28], [30,34], [36,40], [42,46],
+];
+
+var cachedData = null;
+
+function hexToRgb(color) {
+  if (!color) return '';
+  var r = Math.round((color.red   || 0) * 255);
+  var g = Math.round((color.green || 0) * 255);
+  var b = Math.round((color.blue  || 0) * 255);
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
+}
+
+function getBorderStyle(i, j, side, numCols) {
+  var thick = '2px solid black';
+  var thin  = '1px solid #ccc';
+
+  if (thickRows.indexOf(i) !== -1) {
+    if (side === 'top' || side === 'bottom') return thick;
+  }
+
+  for (var g = 0; g < borderGroups.length; g++) {
+    var start = borderGroups[g][0], end = borderGroups[g][1];
+    if (i >= start && i <= end) {
+      if (side === 'top'    && i === start)      return thick;
+      if (side === 'bottom' && i === end)         return thick;
+      if (side === 'left'   && j === 0)           return thick;
+      if (side === 'right'  && j === numCols - 1) return thick;
+    }
+  }
+
+  if (side === 'right' && j === 0) {
+    for (var r = 0; r < thickColRanges.length; r++) {
+      if (i >= thickColRanges[r][0] && i <= thickColRanges[r][1]) return thick;
+    }
+  }
+
+  return thin;
+}
+
+async function fetchAll() {
+  var url = 'https://sheets.googleapis.com/v4/spreadsheets/' + SHEET_ID
+    + '?includeGridData=true'
+    + '&ranges=' + encodeURIComponent(SHEET_NAME)
+    + '&key=' + API_KEY;
+
+  var res  = await fetch(url);
+  var json = await res.json();
+
+  if (json.error) throw new Error(json.error.message);
+
+  var sheet   = json.sheets[0];
+  var rowData = sheet.data[0].rowData || [];
+  var numCols = sheet.properties.gridProperties.columnCount;
+  var numRows = rowData.length;
+
+  var mergeMap = {};
+  (sheet.merges || []).forEach(function(m) {
+    var key = m.startRowIndex + '_' + m.startColumnIndex;
+    mergeMap[key] = {
+      rowspan: m.endRowIndex    - m.startRowIndex,
+      colspan: m.endColumnIndex - m.startColumnIndex
+    };
+  });
+
+  var values = [];
+  var styles = [];
+  for (var i = 0; i < numRows; i++) {
+    var rowVals   = [];
+    var rowStyles = [];
+    var cells = (rowData[i] && rowData[i].values) ? rowData[i].values : [];
+    for (var j = 0; j < numCols; j++) {
+      var cell    = cells[j] || {};
+      var fmt     = cell.effectiveFormat || {};
+      var textFmt = fmt.textFormat || {};
+
+      rowVals.push(cell.formattedValue || '');
+      rowStyles.push({
+        bg:         fmt.backgroundColor     ? hexToRgb(fmt.backgroundColor)     : '',
+        color:      textFmt.foregroundColor ? hexToRgb(textFmt.foregroundColor) : '',
+        fontFamily: textFmt.fontFamily      || '',
+        fontSize:   textFmt.fontSize        || 0,
+        bold:       textFmt.bold            || false,
+        italic:     textFmt.italic          || false,
+      });
+    }
+    values.push(rowVals);
+    styles.push(rowStyles);
+  }
+
+  return { values, styles, mergeMap, numCols, numRows };
+}
+
+function renderTable(data) {
+  var table    = document.getElementById('crtTable');
+  table.innerHTML = '';
+  var skip     = {};
+  var values   = data.values;
+  var styles   = data.styles;
+  var mergeMap = data.mergeMap;
+  var numCols  = data.numCols;
+  var numRows  = data.numRows;
+
+  for (var i = 0; i < numRows; i++) {
+    var tr = document.createElement('tr');
+
+    for (var j = 0; j < numCols; j++) {
+      var key = i + '_' + j;
+      if (skip[key]) continue;
+
+      var td = document.createElement('td');
+      var s  = styles[i][j];
+
+      td.textContent = values[i][j] || '';
+
+      if (s.bg)         td.style.backgroundColor = s.bg;
+      if (s.color)      td.style.color           = s.color;
+      if (s.fontFamily) td.style.fontFamily      = s.fontFamily + ', Inter, sans-serif';
+      if (s.fontSize)   td.style.fontSize        = s.fontSize + 'px';
+      if (s.bold)       td.style.fontWeight      = 'bold';
+      if (s.italic)     td.style.fontStyle       = 'italic';
+
+      td.style.borderTop    = getBorderStyle(i, j, 'top',    numCols);
+      td.style.borderBottom = getBorderStyle(i, j, 'bottom', numCols);
+      td.style.borderLeft   = getBorderStyle(i, j, 'left',   numCols);
+      td.style.borderRight  = getBorderStyle(i, j, 'right',  numCols);
+
+      if (mergeMap[key]) {
+        td.rowSpan = mergeMap[key].rowspan;
+        td.colSpan = mergeMap[key].colspan;
+        for (var r = 0; r < mergeMap[key].rowspan; r++) {
+          for (var c = 0; c < mergeMap[key].colspan; c++) {
+            if (r !== 0 || c !== 0) skip[(i+r) + '_' + (j+c)] = true;
+          }
+        }
+      }
+
+      var isRow = i < frozenRows;
+      var isCol = j < frozenCols;
+      if (isRow && isCol)   td.classList.add('sticky-row-col');
+      else if (isRow)       td.classList.add('sticky-row');
+      else if (isCol)       td.classList.add('sticky-col');
+
+      td.dataset.col = j;
+      tr.appendChild(td);
+    }
+    table.appendChild(tr);
+  }
+}
+
+function applySticky() {
+  var table = document.getElementById('crtTable');
+  requestAnimationFrame(function() {
+    var rows = table.rows;
+
+    var topOffset = 0;
+    for (var i = 0; i < frozenRows && i < rows.length; i++) {
+      for (var j = 0; j < rows[i].cells.length; j++) {
+        var cell = rows[i].cells[j];
+        cell.style.top = topOffset + 'px';
+        if (!cell.style.backgroundColor ||
+            cell.style.backgroundColor === 'rgba(0, 0, 0, 0)') {
+          cell.style.backgroundColor = '#fff';
+        }
+      }
+      topOffset += rows[i].offsetHeight;
+    }
+
+    var refRowIndex = frozenRows < rows.length ? frozenRows : 0;
+    var refRow      = rows[refRowIndex];
+    if (!refRow) return;
+    var leftOffset = 0;
+
+    for (var j = 0; j < frozenCols; j++) {
+      var refCell = null;
+      for (var k = 0; k < refRow.cells.length; k++) {
+        if (parseInt(refRow.cells[k].dataset.col) === j) {
+          refCell = refRow.cells[k];
+          break;
+        }
+      }
+      if (!refCell) continue;
+      var colWidth = refCell.offsetWidth;
+
+      for (var i = 0; i < rows.length; i++) {
+        for (var k = 0; k < rows[i].cells.length; k++) {
+          if (parseInt(rows[i].cells[k].dataset.col) === j) {
+            rows[i].cells[k].style.left = leftOffset + 'px';
+            if (!rows[i].cells[k].style.backgroundColor ||
+                rows[i].cells[k].style.backgroundColor === 'rgba(0, 0, 0, 0)') {
+              rows[i].cells[k].style.backgroundColor = '#fff';
+            }
+            break;
+          }
+        }
+      }
+      leftOffset += colWidth;
+    }
+  });
+}
+
+async function init() {
+  try {
+    cachedData = await fetchAll();
+    document.getElementById('loading').style.display = 'none';
+    renderTable(cachedData);
+    applySticky();
+  } catch(e) {
+    document.getElementById('loading').textContent = '❌ โหลดไม่สำเร็จ: ' + e.message;
+  }
+}
+
+function searchName(channel) {
+  var inputId   = channel === 1 ? 'nameInput1' : 'nameInput2';
+  var highlight = channel === 1 ? 'highlight-blue' : 'highlight-red';
+
+  var table = document.getElementById('crtTable');
+  var cells = table.getElementsByTagName('td');
+
+  for (var i = 0; i < cells.length; i++) {
+    cells[i].classList.remove(highlight);
+  }
+
+  var name = document.getElementById(inputId).value.trim().toLowerCase();
+  if (!name) return;
+
+  for (var i = 0; i < cells.length; i++) {
+    if (cells[i].textContent.toLowerCase().includes(name)) {
+      cells[i].classList.add(highlight);
+    }
+  }
+}
+
+init();
+</script>
+
+</body>
+</html>
